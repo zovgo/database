@@ -112,6 +112,10 @@ func NewProvider[K comparable, V any, DB any](db *Database[DB], opts ModelOption
 
 // LoadEntry ...
 func (provider *ProviderImpl[K, V, DB]) LoadEntry(k K) (V, bool) {
+	var zero V
+	if provider.closed.Load() {
+		return zero, false
+	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
 	return provider.entries.Get(k)
@@ -119,6 +123,10 @@ func (provider *ProviderImpl[K, V, DB]) LoadEntry(k K) (V, bool) {
 
 // LoadEntryFunc ...
 func (provider *ProviderImpl[K, V, DB]) LoadEntryFunc(yield func(K, V) bool) (V, bool) {
+	var zero V
+	if provider.closed.Load() {
+		return zero, false
+	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
 	for k, v := range provider.entries {
@@ -126,12 +134,14 @@ func (provider *ProviderImpl[K, V, DB]) LoadEntryFunc(yield func(K, V) bool) (V,
 			return v, true
 		}
 	}
-	var zero V
 	return zero, false
 }
 
 // SetEntry ...
 func (provider *ProviderImpl[K, V, DB]) SetEntry(k K, v V) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
 	provider.entries.Set(k, v)
@@ -139,6 +149,9 @@ func (provider *ProviderImpl[K, V, DB]) SetEntry(k K, v V) {
 
 // DeleteEntry ...
 func (provider *ProviderImpl[K, V, DB]) DeleteEntry(k K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
 	provider.entries.Delete(k)
@@ -146,6 +159,9 @@ func (provider *ProviderImpl[K, V, DB]) DeleteEntry(k K) {
 
 // PutEntry ...
 func (provider *ProviderImpl[K, V, DB]) PutEntry(k K, v V) bool {
+	if provider.closed.Load() {
+		return false
+	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
 	return provider.entries.Put(k, v)
@@ -153,6 +169,9 @@ func (provider *ProviderImpl[K, V, DB]) PutEntry(k K, v V) bool {
 
 // Entries ...
 func (provider *ProviderImpl[K, V, DB]) Entries() iter.Seq[V] {
+	if provider.closed.Load() {
+		return func(yield func(V) bool) {}
+	}
 	return func(yield func(V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
@@ -166,6 +185,9 @@ func (provider *ProviderImpl[K, V, DB]) Entries() iter.Seq[V] {
 
 // MapEntries ...
 func (provider *ProviderImpl[K, V, DB]) MapEntries() iter.Seq2[K, V] {
+	if provider.closed.Load() {
+		return func(yield func(K, V) bool) {}
+	}
 	return func(yield func(K, V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()

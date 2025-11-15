@@ -91,6 +91,9 @@ func NewProviderCollection[K comparable, V any, DB any](db *Database[DB], opts M
 
 // LoadEntries ...
 func (provider *ProviderCollectionImpl[K, V, DB]) LoadEntries(ownerKey K) ([]V, bool) {
+	if provider.closed.Load() {
+		return nil, false
+	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
 	entries, exists := provider.entries.Get(ownerKey)
@@ -103,6 +106,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) LoadEntries(ownerKey K) ([]V, 
 
 // PutEntry ...
 func (provider *ProviderCollectionImpl[K, V, DB]) PutEntry(ownerKey K, v V) bool {
+	if provider.closed.Load() {
+		return false
+	}
 	modelKey := provider.opts.IdentifyModel(v)
 
 	provider.entriesMu.Lock()
@@ -128,6 +134,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) PutEntry(ownerKey K, v V) bool
 
 // SetEntry ...
 func (provider *ProviderCollectionImpl[K, V, DB]) SetEntry(ownerKey K, v V) {
+	if provider.closed.Load() {
+		return
+	}
 	modelKey := provider.opts.IdentifyModel(v)
 
 	provider.entriesMu.Lock()
@@ -158,6 +167,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) SetEntry(ownerKey K, v V) {
 
 // RemoveEntry ...
 func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntry(v V) {
+	if provider.closed.Load() {
+		return
+	}
 	ownerKey := provider.opts.IdentifyOwner(v)
 	modelKey := provider.opts.IdentifyModel(v)
 	provider.RemoveEntryByID(ownerKey, modelKey)
@@ -165,10 +177,16 @@ func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntry(v V) {
 
 // RemoveEntryByID ...
 func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntryByID(ownerKey, modelKey K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.removeEntry(ownerKey, modelKey)
 }
 
 func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
 
@@ -192,6 +210,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey
 
 // RemoveEntries ...
 func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntries(ownerKey K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
 	provider.entries.Delete(ownerKey)
@@ -199,6 +220,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntries(ownerKey K) {
 
 // Entries ...
 func (provider *ProviderCollectionImpl[K, V, DB]) Entries() iter.Seq[V] {
+	if provider.closed.Load() {
+		return func(yield func(V) bool) {}
+	}
 	return func(yield func(V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
@@ -214,6 +238,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Entries() iter.Seq[V] {
 
 // MapEntries ...
 func (provider *ProviderCollectionImpl[K, V, DB]) MapEntries() iter.Seq2[K, []V] {
+	if provider.closed.Load() {
+		return func(yield func(K, []V) bool) {}
+	}
 	return func(yield func(K, []V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
