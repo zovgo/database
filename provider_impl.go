@@ -117,6 +117,19 @@ func (provider *ProviderImpl[K, V, DB]) LoadEntry(k K) (V, bool) {
 	return provider.entries.Get(k)
 }
 
+// LoadEntryFunc ...
+func (provider *ProviderImpl[K, V, DB]) LoadEntryFunc(yield func(K, V) bool) (V, bool) {
+	provider.entriesMu.RLock()
+	defer provider.entriesMu.RUnlock()
+	for k, v := range provider.entries {
+		if yield(k, v) {
+			return v, true
+		}
+	}
+	var zero V
+	return zero, false
+}
+
 // SetEntry ...
 func (provider *ProviderImpl[K, V, DB]) SetEntry(k K, v V) {
 	provider.entriesMu.Lock()

@@ -23,6 +23,9 @@ type Provider[K comparable, V, DB any] interface {
 	DeleteEntry(K)
 	// LoadEntry tries to load the entry from provider.
 	LoadEntry(K) (V, bool)
+	// LoadEntryFunc tries to load the entry from provider by iterating across
+	// all entries.
+	LoadEntryFunc(yield func(K, V) bool) (V, bool)
 	// Entries returns iterator of all provider entries.
 	Entries() iter.Seq[V]
 	// MapEntries returns key-value iterator of all provider entries.
