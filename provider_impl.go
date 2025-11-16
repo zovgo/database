@@ -4,18 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/k4ties/gq"
-	"github.com/zovgo/database/internal"
 	"iter"
-	"slices"
 	"sync"
 	"sync/atomic"
 )
-
-//
-// I'm not sure what would be better, IdentifiedModel interface (with UUID
-// method), or ask user for a function "func(V) K", that gets identifier by
-// model by user choice. But for now I'll keep function.
-//
 
 // ProviderImpl is default implementation of the Provider.
 type ProviderImpl[K comparable, V any, DB any] struct {
@@ -75,8 +67,8 @@ type ModelOptions[K comparable, V any, DB any] struct {
 // Panics, if something went wrong.
 func (opts ModelOptions[K, V, DB]) validate() {
 	for _, v := range []struct {
-		invalidIf, expected bool
-		name                string
+		invalidIf bool
+		name      string
 	}{
 		{invalidIf: opts.IdentifyModel == nil, name: "IdentifyModel func is nil"},
 		{invalidIf: opts.IdentifyDBModel == nil, name: "IdentifyDBModel func is nil"},
@@ -85,10 +77,9 @@ func (opts ModelOptions[K, V, DB]) validate() {
 		{invalidIf: opts.CreateModel == nil, name: "CreateModel func is nil"},
 		{invalidIf: !opts.AlwaysUpdate && opts.CompareModels == nil, name: "CompareModels func is nil and not AlwaysUpdate"},
 	} {
-		if v.invalidIf == v.expected {
-			continue
+		if v.invalidIf {
+			panic(fmt.Errorf("ModelOptions: the subject (%s) is unexpected", v.name))
 		}
-		panic(fmt.Errorf("ModelOptions: the subject (%s) is unexpected", v.name))
 	}
 }
 
@@ -235,51 +226,45 @@ func (provider *ProviderImpl[K, V, DB]) Close() error {
 			return
 		}
 
+		// Create a map of database models for faster lookup
+		dbModelMap := make(map[K]DB, len(dbModels))
+		for _, dbModel := range dbModels {
+			key := provider.opts.IdentifyDBModel(dbModel)
+			dbModelMap[key] = dbModel
+		}
+
+		// Sync memory to database
 		for id, memoryEntry := range provider.entries {
-			if !slices.ContainsFunc(dbModels, func(dbEntry DB) bool {
-				return provider.opts.IdentifyDBModel(dbEntry) == provider.opts.IdentifyModel(memoryEntry)
-			}) {
+			dbModel, existsInDB := dbModelMap[id]
+
+			if !existsInDB {
 				// Entry exists in memory but not exists in the database, so
 				// creating it in the db
 				provider.db.NewEntry(provider.opts.CreateDBModel(id, memoryEntry))
 				continue
 			}
 
+			// Remove from map to track which DB entries are still in memory
+			delete(dbModelMap, id)
+
 			if provider.opts.NeverUpdate {
 				continue
 			}
-			for _, dbModel := range dbModels {
-				raw := provider.opts.CreateDBModel(id, memoryEntry)
-				if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, dbModel) {
-					// Model in memory and model in database aren't equal
-					// So, updating it in the database
-					query, args := provider.opts.ModifyQuery(dbModel)
-					provider.db.UpdateEntry(raw, query, args...)
-					continue
-				}
+
+			// Check if update is needed
+			dbModelFromMemory := provider.opts.CreateDBModel(id, memoryEntry)
+			if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(dbModelFromMemory, dbModel) {
+				// Model in memory and model in database aren't equal
+				// So, updating it in the database
+				query, args := provider.opts.ModifyQuery(dbModel)
+				provider.db.UpdateEntry(dbModelFromMemory, query, args...)
 			}
 		}
 
-		for _, dbModel := range dbModels {
-			dbID := provider.opts.IdentifyDBModel(dbModel)
-			if _, ok := provider.entries.Get(dbID); !ok {
-				// Entry exists in database, but not exists in memory, so,
-				// deleting it from the database.
-				query, args := provider.opts.ModifyQuery(dbModel)
-				provider.db.DeleteEntry(query, args...)
-				continue
-			}
-
-			// Check, if entry exists in database and not exists in memory
-			if !internal.MapContainsFunc(provider.entries, func(k K, v V) bool {
-				return k == dbID
-			}) {
-				// Entry exists in database, but not exists in memory, so,
-				// deleting it from the database.
-				query, args := provider.opts.ModifyQuery(dbModel)
-				provider.db.DeleteEntry(query, args...)
-				continue
-			}
+		// Delete entries that exist in database but not in memory
+		for _, dbModel := range dbModelMap {
+			query, args := provider.opts.ModifyQuery(dbModel)
+			provider.db.DeleteEntry(query, args...)
 		}
 	}()
 	// Closing the database once all models are saved.
