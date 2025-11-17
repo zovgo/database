@@ -271,11 +271,12 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
 		}
 
 		if len(allMemoryEntries) == 0 && len(dbModels) == 0 {
+			// No entries to modify
 			return
 		}
 
 		if len(allMemoryEntries) == 0 && len(dbModels) > 0 {
-			// Clear all database entries
+			// Memory has no entries, but db has, so clearing all database entries
 			for _, dbModel := range dbModels {
 				query, args := provider.opts.ModifyQuery(dbModel)
 				provider.db.DeleteEntry(query, args...)
@@ -284,7 +285,7 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
 		}
 
 		if len(allMemoryEntries) > 0 && len(dbModels) == 0 {
-			// Create all database entries from memory
+			// Models has entries, but db doesn't, so creating db entries from memory
 			for _, entry := range allMemoryEntries {
 				id := provider.opts.IdentifyModel(entry)
 				raw := provider.opts.CreateDBModel(id, entry)
@@ -293,43 +294,46 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
 			return
 		}
 
+		// Sync memory entries with database entries
+		// First, handle updates and creations
 		for _, memoryEntry := range allMemoryEntries {
-			// Update or create entries that exist in memory
 			memoryKey := provider.opts.IdentifyModel(memoryEntry)
-
-			var dbEntryIndex = -1
-			for i, dbModel := range dbModels {
-				// Check if entry exists in database
+			// Find this entry in database
+			var (
+				matchingDBModel DB
+				found           bool
+			)
+			for _, dbModel := range dbModels {
 				if provider.opts.IdentifyDBModel(dbModel) == memoryKey {
-					dbEntryIndex = i
+					matchingDBModel = dbModel
+					found = true
 					break
 				}
 			}
+			if found {
+				if provider.opts.NeverUpdate {
+					// Skip update if NeverUpdate is set
+					continue
+				}
 
-			if dbEntryIndex < 0 {
-				// Create new database entry
+				// Entry exists in both memory and database
+				raw := provider.opts.CreateDBModel(memoryKey, memoryEntry)
+				if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, matchingDBModel) {
+					// Model in memory and model in database aren't equal or AlwaysUpdate is set
+					// So, updating it in the database
+					query, args := provider.opts.ModifyQuery(matchingDBModel)
+					provider.db.UpdateEntry(raw, query, args...)
+				}
+			} else {
+				// Entry exists in memory but not in database, so creating it
 				raw := provider.opts.CreateDBModel(memoryKey, memoryEntry)
 				provider.db.NewEntry(raw)
-				continue
-			}
-
-			if provider.opts.NeverUpdate {
-				continue
-			}
-
-			// Update existing database entry if needed
-			dbModel := dbModels[dbEntryIndex]
-			raw := provider.opts.CreateDBModel(memoryKey, memoryEntry)
-			if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, dbModel) {
-				query, args := provider.opts.ModifyQuery(dbModel)
-				provider.db.UpdateEntry(raw, query, args...)
 			}
 		}
-
+		// Then, delete entries that exist in database but not in memory
 		for _, dbModel := range dbModels {
-			// Remove database entries that don't exist in memory
 			dbKey := provider.opts.IdentifyDBModel(dbModel)
-			// Trying to find DB model in the memory
+			// Check if this database entry exists in memory
 			var found bool
 			for _, memoryEntry := range allMemoryEntries {
 				if provider.opts.IdentifyModel(memoryEntry) == dbKey {
@@ -338,14 +342,12 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
 				}
 			}
 			if !found {
-				// There's a model in DB and no in memory.
-				// So, deleting this model from the DB
+				// Entry exists in database but not in memory, so deleting it
 				query, args := provider.opts.ModifyQuery(dbModel)
 				provider.db.DeleteEntry(query, args...)
 			}
 		}
 	}()
-
 	return provider.db.Close()
 }
 

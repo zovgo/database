@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/k4ties/gq"
-	"github.com/zovgo/database/internal"
 	"iter"
-	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -235,31 +233,42 @@ func (provider *ProviderImpl[K, V, DB]) Close() error {
 			return
 		}
 
+		// Sync memory entries with database entries
+		// First, handle updates and creations
 		for id, memoryEntry := range provider.entries {
-			if !slices.ContainsFunc(dbModels, func(dbEntry DB) bool {
-				return provider.opts.IdentifyDBModel(dbEntry) == provider.opts.IdentifyModel(memoryEntry)
-			}) {
+			// Find this entry in database
+			var (
+				matchingDBModel DB
+				found           bool
+			)
+			for _, dbModel := range dbModels {
+				if provider.opts.IdentifyDBModel(dbModel) == id {
+					matchingDBModel = dbModel
+					found = true
+					break
+				}
+			}
+			if found {
+				// Entry exists in both memory and database
+				raw := provider.opts.CreateDBModel(id, memoryEntry)
+				if provider.opts.NeverUpdate {
+					// Skip update if NeverUpdate is set
+					continue
+				}
+				if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, matchingDBModel) {
+					// Model in memory and model in database aren't equal or AlwaysUpdate is set
+					// So, updating it in the database
+					query, args := provider.opts.ModifyQuery(matchingDBModel)
+					provider.db.UpdateEntry(raw, query, args...)
+				}
+			} else {
 				// Entry exists in memory but not exists in the database, so
 				// creating it in the db
 				provider.db.NewEntry(provider.opts.CreateDBModel(id, memoryEntry))
-				continue
-			}
-
-			if provider.opts.NeverUpdate {
-				continue
-			}
-			for _, dbModel := range dbModels {
-				raw := provider.opts.CreateDBModel(id, memoryEntry)
-				if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, dbModel) {
-					// Model in memory and model in database aren't equal
-					// So, updating it in the database
-					query, args := provider.opts.ModifyQuery(dbModel)
-					provider.db.UpdateEntry(raw, query, args...)
-					continue
-				}
 			}
 		}
 
+		// Then, delete entries that exist in database but not in memory
 		for _, dbModel := range dbModels {
 			dbID := provider.opts.IdentifyDBModel(dbModel)
 			if _, ok := provider.entries.Get(dbID); !ok {
@@ -267,18 +276,6 @@ func (provider *ProviderImpl[K, V, DB]) Close() error {
 				// deleting it from the database.
 				query, args := provider.opts.ModifyQuery(dbModel)
 				provider.db.DeleteEntry(query, args...)
-				continue
-			}
-
-			// Check, if entry exists in database and not exists in memory
-			if !internal.MapContainsFunc(provider.entries, func(k K, v V) bool {
-				return k == dbID
-			}) {
-				// Entry exists in database, but not exists in memory, so,
-				// deleting it from the database.
-				query, args := provider.opts.ModifyQuery(dbModel)
-				provider.db.DeleteEntry(query, args...)
-				continue
 			}
 		}
 	}()
