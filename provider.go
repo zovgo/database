@@ -14,6 +14,8 @@ type Provider[K comparable, V, DB any] interface {
 	// Close method should save modified models to database and close the
 	// parent database.
 	io.Closer
+	CloseUnsafe() error
+	Closed() bool
 	// PutEntry tries to put entry to the provider memory.
 	// It returns false, if there's already an entry by this key.
 	PutEntry(K, V) bool

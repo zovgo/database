@@ -300,15 +300,17 @@ func (provider *ProviderCollectionImpl[K, V, DB]) MapEntriesUnsafe() iter.Seq2[K
 
 // Close ...
 func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
+	provider.entriesMu.Lock()
+	defer provider.entriesMu.Unlock()
+	return provider.CloseUnsafe()
+}
+
+func (provider *ProviderCollectionImpl[K, V, DB]) CloseUnsafe() error {
 	if !provider.closed.CompareAndSwap(false, true) {
 		return ErrAlreadyClosed
 	}
-
 	func() {
 		dbModels := provider.db.Entries()
-
-		provider.entriesMu.Lock()
-		defer provider.entriesMu.Unlock()
 
 		var allMemoryEntries []V
 		for _, entries := range provider.entries {
@@ -394,6 +396,11 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Close() error {
 		}
 	}()
 	return provider.db.Close()
+}
+
+// Closed ....
+func (provider *ProviderCollectionImpl[K, V, DB]) Closed() bool {
+	return provider.closed.Load()
 }
 
 // Load ...

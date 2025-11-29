@@ -10,6 +10,8 @@ import (
 // collections of value.s
 type ProviderCollection[K comparable, V, DB any] interface {
 	io.Closer
+	CloseUnsafe() error
+	Closed() bool
 	// PutEntry adds an entry to the collection
 	// Returns false if an entry with the same model key already exists
 	PutEntry(K, V) bool

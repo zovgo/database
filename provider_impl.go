@@ -248,15 +248,17 @@ func (provider *ProviderImpl[K, V, DB]) MapEntriesUnsafe() iter.Seq2[K, V] {
 
 // Close ...
 func (provider *ProviderImpl[K, V, DB]) Close() error {
+	provider.entriesMu.Lock()
+	defer provider.entriesMu.Unlock()
+	return provider.CloseUnsafe()
+}
+
+func (provider *ProviderImpl[K, V, DB]) CloseUnsafe() error {
 	if !provider.closed.CompareAndSwap(false, true) {
 		return ErrAlreadyClosed
 	}
 	func() {
 		dbModels := provider.db.Entries()
-
-		provider.entriesMu.Lock()
-		defer provider.entriesMu.Unlock()
-
 		if provider.entries.Len() == 0 && len(dbModels) == 0 {
 			// No entries to modify.
 			return
@@ -330,6 +332,11 @@ func (provider *ProviderImpl[K, V, DB]) Close() error {
 	}()
 	// Closing the database once all models are saved.
 	return provider.db.Close()
+}
+
+// Closed ....
+func (provider *ProviderImpl[K, V, DB]) Closed() bool {
+	return provider.closed.Load()
 }
 
 // Load loads all entries from database and stores them to the Provider memory.

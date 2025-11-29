@@ -126,6 +126,11 @@ func (db *Database[M]) Close() error {
 	return nil
 }
 
+// Closed ...
+func (db *Database[T]) Closed() bool {
+	return db.closed.Load()
+}
+
 // Logger returns Database logger.
 func (db *Database[T]) Logger() *slog.Logger {
 	if db.closed.Load() {
