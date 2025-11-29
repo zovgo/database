@@ -116,6 +116,14 @@ func (provider *ProviderImpl[K, V, DB]) LoadEntry(k K) (V, bool) {
 	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
+	return provider.LoadEntryUnsafe(k)
+}
+
+func (provider *ProviderImpl[K, V, DB]) LoadEntryUnsafe(k K) (V, bool) {
+	var zero V
+	if provider.closed.Load() {
+		return zero, false
+	}
 	return provider.entries.Get(k)
 }
 
@@ -127,6 +135,14 @@ func (provider *ProviderImpl[K, V, DB]) LoadEntryFunc(yield func(K, V) bool) (V,
 	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
+	return provider.LoadEntryFuncUnsafe(yield)
+}
+
+func (provider *ProviderImpl[K, V, DB]) LoadEntryFuncUnsafe(yield func(K, V) bool) (V, bool) {
+	var zero V
+	if provider.closed.Load() {
+		return zero, false
+	}
 	for k, v := range provider.entries {
 		if yield(k, v) {
 			return v, true
@@ -142,6 +158,13 @@ func (provider *ProviderImpl[K, V, DB]) SetEntry(k K, v V) {
 	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	provider.SetEntryUnsafe(k, v)
+}
+
+func (provider *ProviderImpl[K, V, DB]) SetEntryUnsafe(k K, v V) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entries.Set(k, v)
 }
 
@@ -152,6 +175,13 @@ func (provider *ProviderImpl[K, V, DB]) DeleteEntry(k K) {
 	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	provider.DeleteEntryUnsafe(k)
+}
+
+func (provider *ProviderImpl[K, V, DB]) DeleteEntryUnsafe(k K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entries.Delete(k)
 }
 
@@ -162,6 +192,13 @@ func (provider *ProviderImpl[K, V, DB]) PutEntry(k K, v V) bool {
 	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	return provider.PutEntryUnsafe(k, v)
+}
+
+func (provider *ProviderImpl[K, V, DB]) PutEntryUnsafe(k K, v V) bool {
+	if provider.closed.Load() {
+		return false
+	}
 	return provider.entries.Put(k, v)
 }
 
@@ -173,6 +210,12 @@ func (provider *ProviderImpl[K, V, DB]) Entries() iter.Seq[V] {
 	return func(yield func(V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
+		provider.EntriesUnsafe()(yield)
+	}
+}
+
+func (provider *ProviderImpl[K, V, DB]) EntriesUnsafe() iter.Seq[V] {
+	return func(yield func(V) bool) {
 		for _, v := range provider.entries {
 			if !yield(v) {
 				return
@@ -189,6 +232,12 @@ func (provider *ProviderImpl[K, V, DB]) MapEntries() iter.Seq2[K, V] {
 	return func(yield func(K, V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
+		provider.MapEntriesUnsafe()(yield)
+	}
+}
+
+func (provider *ProviderImpl[K, V, DB]) MapEntriesUnsafe() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
 		for k, v := range provider.entries {
 			if !yield(k, v) {
 				return
@@ -306,6 +355,11 @@ func (provider *ProviderImpl[K, V, DB]) Load() {
 // Database ...
 func (provider *ProviderImpl[K, V, DB]) Database() *Database[DB] {
 	return provider.db
+}
+
+// L ...
+func (provider *ProviderImpl[K, V, DB]) L() *sync.RWMutex {
+	return &provider.entriesMu
 }
 
 var ErrAlreadyClosed = errors.New("already closed")

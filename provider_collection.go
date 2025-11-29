@@ -3,6 +3,7 @@ package database
 import (
 	"io"
 	"iter"
+	"sync"
 )
 
 // ProviderCollection is the interface for database provider that stores
@@ -22,7 +23,7 @@ type ProviderCollection[K comparable, V, DB any] interface {
 	// RemoveEntries removes all entries for a specific owner key
 	RemoveEntries(K)
 	// LoadEntries returns all entries for a specific owner key
-	LoadEntries(K) ([]V, bool)
+	LoadEntries(key K, clone bool) ([]V, bool)
 	// Entries returns iterator of all entries in the collection
 	Entries() iter.Seq[V]
 	// MapEntries returns key-collection iterator of all provider entries
@@ -31,4 +32,6 @@ type ProviderCollection[K comparable, V, DB any] interface {
 	Load()
 	// Database returns database instance of this provider.
 	Database() *Database[DB]
+	// L returns entries mutex (locker) for this provider.
+	L() *sync.RWMutex
 }

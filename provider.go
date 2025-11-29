@@ -3,6 +3,7 @@ package database
 import (
 	"io"
 	"iter"
+	"sync"
 )
 
 // Provider is the implementation of database provider. It loads and saves
@@ -35,4 +36,6 @@ type Provider[K comparable, V, DB any] interface {
 	Load()
 	// Database returns database instance of this provider.
 	Database() *Database[DB]
+	// L returns entries mutex (locker) for this provider.
+	L() *sync.RWMutex
 }

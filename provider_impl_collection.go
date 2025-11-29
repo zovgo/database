@@ -90,18 +90,28 @@ func NewProviderCollection[K comparable, V any, DB any](db *Database[DB], opts M
 }
 
 // LoadEntries ...
-func (provider *ProviderCollectionImpl[K, V, DB]) LoadEntries(ownerKey K) ([]V, bool) {
+func (provider *ProviderCollectionImpl[K, V, DB]) LoadEntries(ownerKey K, clone bool) ([]V, bool) {
 	if provider.closed.Load() {
 		return nil, false
 	}
 	provider.entriesMu.RLock()
 	defer provider.entriesMu.RUnlock()
+	return provider.LoadEntriesUnsafe(ownerKey, clone)
+}
+
+// LoadEntriesUnsafe ...
+func (provider *ProviderCollectionImpl[K, V, DB]) LoadEntriesUnsafe(ownerKey K, clone bool) ([]V, bool) {
+	if provider.closed.Load() {
+		return nil, false
+	}
 	entries, exists := provider.entries.Get(ownerKey)
 	if !exists {
 		return nil, false
 	}
-	cloned := slices.Clone(entries)
-	return cloned, true
+	if clone {
+		return slices.Clone(entries), true
+	}
+	return entries, true
 }
 
 // PutEntry ...
@@ -109,24 +119,24 @@ func (provider *ProviderCollectionImpl[K, V, DB]) PutEntry(ownerKey K, v V) bool
 	if provider.closed.Load() {
 		return false
 	}
-	modelKey := provider.opts.IdentifyModel(v)
-
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	return provider.PutEntryUnsafe(ownerKey, v)
+}
 
+func (provider *ProviderCollectionImpl[K, V, DB]) PutEntryUnsafe(ownerKey K, v V) bool {
+	modelKey := provider.opts.IdentifyModel(v)
 	entries, exists := provider.entries.Get(ownerKey)
 	if !exists {
 		provider.entries.Set(ownerKey, []V{v})
 		return true
 	}
-
 	// Check if entry with same model key already exists
 	for _, entry := range entries {
 		if provider.opts.IdentifyModel(entry) == modelKey {
 			return false
 		}
 	}
-
 	entries = append(entries, v)
 	provider.entries.Set(ownerKey, entries)
 	return true
@@ -137,17 +147,18 @@ func (provider *ProviderCollectionImpl[K, V, DB]) SetEntry(ownerKey K, v V) {
 	if provider.closed.Load() {
 		return
 	}
-	modelKey := provider.opts.IdentifyModel(v)
-
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	provider.SetEntryUnsafe(ownerKey, v)
+}
 
+func (provider *ProviderCollectionImpl[K, V, DB]) SetEntryUnsafe(ownerKey K, v V) {
+	modelKey := provider.opts.IdentifyModel(v)
 	entries, exists := provider.entries.Get(ownerKey)
 	if !exists {
 		provider.entries.Set(ownerKey, []V{v})
 		return
 	}
-
 	var found bool
 	for i, entry := range entries {
 		// Replace existing entry or append new one
@@ -157,11 +168,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) SetEntry(ownerKey K, v V) {
 			break
 		}
 	}
-
 	if !found {
 		entries = append(entries, v)
 	}
-
 	provider.entries.Set(ownerKey, entries)
 }
 
@@ -170,9 +179,16 @@ func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntry(v V) {
 	if provider.closed.Load() {
 		return
 	}
+	provider.RemoveEntryUnsafe(v)
+}
+
+func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntryUnsafe(v V) {
+	if provider.closed.Load() {
+		return
+	}
 	ownerKey := provider.opts.IdentifyOwner(v)
 	modelKey := provider.opts.IdentifyModel(v)
-	provider.RemoveEntryByID(ownerKey, modelKey)
+	provider.RemoveEntryByIDUnsafe(ownerKey, modelKey)
 }
 
 // RemoveEntryByID ...
@@ -180,21 +196,28 @@ func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntryByID(ownerKey, mode
 	if provider.closed.Load() {
 		return
 	}
-	provider.removeEntry(ownerKey, modelKey)
+	provider.removeEntry(ownerKey, modelKey, true)
 }
 
-func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey K) {
+func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntryByIDUnsafe(ownerKey, modelKey K) {
 	if provider.closed.Load() {
 		return
 	}
-	provider.entriesMu.Lock()
-	defer provider.entriesMu.Unlock()
+	provider.removeEntry(ownerKey, modelKey, false)
+}
 
+func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey K, safe bool) {
+	if provider.closed.Load() {
+		return
+	}
+	if safe {
+		provider.entriesMu.Lock()
+		defer provider.entriesMu.Unlock()
+	}
 	entries, exists := provider.entries.Get(ownerKey)
 	if !exists {
 		return
 	}
-
 	for i, entry := range entries {
 		if provider.opts.IdentifyModel(entry) == modelKey {
 			entries = append(entries[:i], entries[i+1:]...)
@@ -215,6 +238,13 @@ func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntries(ownerKey K) {
 	}
 	provider.entriesMu.Lock()
 	defer provider.entriesMu.Unlock()
+	provider.RemoveEntriesUnsafe(ownerKey)
+}
+
+func (provider *ProviderCollectionImpl[K, V, DB]) RemoveEntriesUnsafe(ownerKey K) {
+	if provider.closed.Load() {
+		return
+	}
 	provider.entries.Delete(ownerKey)
 }
 
@@ -226,6 +256,12 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Entries() iter.Seq[V] {
 	return func(yield func(V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
+		provider.EntriesUnsafe()(yield)
+	}
+}
+
+func (provider *ProviderCollectionImpl[K, V, DB]) EntriesUnsafe() iter.Seq[V] {
+	return func(yield func(V) bool) {
 		for _, entries := range provider.entries {
 			for _, v := range entries {
 				if !yield(v) {
@@ -244,6 +280,15 @@ func (provider *ProviderCollectionImpl[K, V, DB]) MapEntries() iter.Seq2[K, []V]
 	return func(yield func(K, []V) bool) {
 		provider.entriesMu.RLock()
 		defer provider.entriesMu.RUnlock()
+		provider.MapEntriesUnsafe()(yield)
+	}
+}
+
+func (provider *ProviderCollectionImpl[K, V, DB]) MapEntriesUnsafe() iter.Seq2[K, []V] {
+	if provider.closed.Load() {
+		return func(yield func(K, []V) bool) {}
+	}
+	return func(yield func(K, []V) bool) {
 		for k, entries := range provider.entries {
 			copied := slices.Clone(entries)
 			if !yield(k, copied) {
@@ -364,11 +409,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Load() {
 				continue
 			}
 
-			provider.entriesMu.Lock()
 			entries, _ := provider.entries.Get(ownerKey)
 			entries = append(entries, m)
 			provider.entries.Set(ownerKey, entries)
-			provider.entriesMu.Unlock()
 		}
 	})
 }
@@ -376,4 +419,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Load() {
 // Database ...
 func (provider *ProviderCollectionImpl[K, V, DB]) Database() *Database[DB] {
 	return provider.db
+}
+
+// L ...
+func (provider *ProviderCollectionImpl[K, V, DB]) L() *sync.RWMutex {
+	return &provider.entriesMu
 }
