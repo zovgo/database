@@ -11,9 +11,10 @@ package database
 import (
 	"errors"
 	"fmt"
-	"github.com/zovgo/database/internal"
 	"log/slog"
 	"sync/atomic"
+
+	"github.com/zovgo/database/internal"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -145,19 +146,16 @@ func (db *Database[M]) checkForErrors(method string, tx *gorm.DB) (_ bool) {
 	if tx.Error == nil {
 		return true
 	}
-
 	// Handle record not found separately (not a real error)
 	if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
 		db.l.Debug("record not found", "method", method)
 		return
 	}
-
 	// Log actual database errors
 	db.l.Error("database operation failed",
 		"method", method,
 		"err", tx.Error,
 		"rows_affected", tx.RowsAffected,
 	)
-
 	return
 }

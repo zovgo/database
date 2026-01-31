@@ -3,10 +3,11 @@ package database
 import (
 	"errors"
 	"fmt"
-	"github.com/k4ties/gq"
 	"iter"
 	"sync"
 	"sync/atomic"
+
+	"github.com/k4ties/gq"
 )
 
 //
@@ -50,9 +51,9 @@ type ModelOptions[K comparable, V any, DB any] struct {
 	// CreateDBModel is function that is required to create database models
 	// from entries (convert models from Provider memory to database models and
 	// save them)
-	CreateDBModel func(K, V) DB
+	CreateDBModel func(K, V) (DB, error)
 	// CreateModel should create default model from DB model.
-	CreateModel func(DB) V
+	CreateModel func(DB) (V, error)
 	// CompareModels is function to compare two DB models. It is required to
 	// check, if we need to update model in the database.
 	CompareModels func(DB, DB) bool
@@ -67,6 +68,9 @@ type ModelOptions[K comparable, V any, DB any] struct {
 	// OnLoad is function that is called right before model is going to be
 	// added. It can cancel adding model by returning false in this function.
 	OnLoad func(K, *V, DB) bool
+	// NotCloseDatabase marks, if Provider should not close database when user
+	// is calling Provider.Close method.
+	NotCloseDatabase bool
 }
 
 // validate validates entered options.
@@ -277,7 +281,11 @@ func (provider *ProviderImpl[K, V, DB]) CloseUnsafe() error {
 			// Models has entries, but db don't, so creating db entries by
 			// memory reference
 			for id, entry := range provider.entries {
-				raw := provider.opts.CreateDBModel(id, entry)
+				raw, err := provider.opts.CreateDBModel(id, entry)
+				if err != nil {
+					provider.db.l.Error("error creating DB model", "id", id, "err", err.Error())
+					continue
+				}
 				// Asserting to the database
 				provider.db.NewEntry(raw)
 			}
@@ -301,7 +309,11 @@ func (provider *ProviderImpl[K, V, DB]) CloseUnsafe() error {
 			}
 			if found {
 				// Entry exists in both memory and database
-				raw := provider.opts.CreateDBModel(id, memoryEntry)
+				raw, err := provider.opts.CreateDBModel(id, memoryEntry)
+				if err != nil {
+					provider.db.l.Error("error creating DB model", "id", id, "err", err.Error())
+					continue
+				}
 				if provider.opts.NeverUpdate {
 					// Skip update if NeverUpdate is set
 					continue
@@ -315,7 +327,12 @@ func (provider *ProviderImpl[K, V, DB]) CloseUnsafe() error {
 			} else {
 				// Entry exists in memory but not exists in the database, so
 				// creating it in the db
-				provider.db.NewEntry(provider.opts.CreateDBModel(id, memoryEntry))
+				db, err := provider.opts.CreateDBModel(id, memoryEntry)
+				if err != nil {
+					provider.db.l.Error("error creating DB model", "id", id, "err", err.Error())
+					continue
+				}
+				provider.db.NewEntry(db)
 			}
 		}
 
@@ -330,6 +347,9 @@ func (provider *ProviderImpl[K, V, DB]) CloseUnsafe() error {
 			}
 		}
 	}()
+	if provider.opts.NotCloseDatabase {
+		return nil
+	}
 	// Closing the database once all models are saved.
 	return provider.db.Close()
 }
@@ -345,7 +365,11 @@ func (provider *ProviderImpl[K, V, DB]) Closed() bool {
 func (provider *ProviderImpl[K, V, DB]) Load() {
 	provider.once.Do(func() {
 		for _, db := range provider.db.Entries() {
-			m := provider.opts.CreateModel(db)
+			m, err := provider.opts.CreateModel(db)
+			if err != nil {
+				provider.db.l.Error("error creating model from DB model", "id", provider.opts.IdentifyDBModel(db), "err", err.Error())
+				continue
+			}
 			// Get the identifier of this model
 			key := provider.opts.IdentifyModel(m)
 			// Handle the event

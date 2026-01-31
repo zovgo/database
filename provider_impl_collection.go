@@ -2,11 +2,12 @@ package database
 
 import (
 	"fmt"
-	"github.com/k4ties/gq"
 	"iter"
 	"slices"
 	"sync"
 	"sync/atomic"
+
+	"github.com/k4ties/gq"
 )
 
 // ProviderCollectionImpl is default implementation of the ProviderCollection.
@@ -37,9 +38,9 @@ type ModelCollectionOptions[K comparable, V any, DB any] struct {
 	// model in the database
 	ModifyQuery func(DB) (string, []any)
 	// CreateDBModel is function that creates database models from entries
-	CreateDBModel func(K, V) DB
+	CreateDBModel func(K, V) (DB, error)
 	// CreateModel should create default model from DB model
-	CreateModel func(DB) V
+	CreateModel func(DB) (V, error)
 	// CompareModels is function to compare two DB models
 	CompareModels func(DB, DB) bool
 	// AlwaysUpdate marks if we should always update all models
@@ -49,6 +50,9 @@ type ModelCollectionOptions[K comparable, V any, DB any] struct {
 	// OnLoad is function that is called right before model is going to be
 	// added. It can cancel adding model by returning false in this function.
 	OnLoad func(ownerKey K, model *V, dbModel DB) bool
+	// NotCloseDatabase marks, if ProviderCollection should not close database
+	// when user is calling ProviderCollection.Close method.
+	NotCloseDatabase bool
 }
 
 // validate validates entered options
@@ -335,7 +339,11 @@ func (provider *ProviderCollectionImpl[K, V, DB]) CloseUnsafe() error {
 			// Models has entries, but db doesn't, so creating db entries from memory
 			for _, entry := range allMemoryEntries {
 				id := provider.opts.IdentifyModel(entry)
-				raw := provider.opts.CreateDBModel(id, entry)
+				raw, err := provider.opts.CreateDBModel(id, entry)
+				if err != nil {
+					provider.db.l.Error("error creating db model", "id", id, "err", err.Error())
+					continue
+				}
 				provider.db.NewEntry(raw)
 			}
 			return
@@ -362,9 +370,12 @@ func (provider *ProviderCollectionImpl[K, V, DB]) CloseUnsafe() error {
 					// Skip update if NeverUpdate is set
 					continue
 				}
-
 				// Entry exists in both memory and database
-				raw := provider.opts.CreateDBModel(memoryKey, memoryEntry)
+				raw, err := provider.opts.CreateDBModel(memoryKey, memoryEntry)
+				if err != nil {
+					provider.db.l.Error("error creating db model", "id", memoryKey, "err", err.Error())
+					continue
+				}
 				if provider.opts.AlwaysUpdate || !provider.opts.CompareModels(raw, matchingDBModel) {
 					// Model in memory and model in database aren't equal or AlwaysUpdate is set
 					// So, updating it in the database
@@ -373,7 +384,11 @@ func (provider *ProviderCollectionImpl[K, V, DB]) CloseUnsafe() error {
 				}
 			} else {
 				// Entry exists in memory but not in database, so creating it
-				raw := provider.opts.CreateDBModel(memoryKey, memoryEntry)
+				raw, err := provider.opts.CreateDBModel(memoryKey, memoryEntry)
+				if err != nil {
+					provider.db.l.Error("error creating db model", "id", memoryKey, "err", err.Error())
+					continue
+				}
 				provider.db.NewEntry(raw)
 			}
 		}
@@ -395,6 +410,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) CloseUnsafe() error {
 			}
 		}
 	}()
+	if provider.opts.NotCloseDatabase {
+		return nil
+	}
 	return provider.db.Close()
 }
 
@@ -407,15 +425,17 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Closed() bool {
 func (provider *ProviderCollectionImpl[K, V, DB]) Load() {
 	provider.once.Do(func() {
 		for _, db := range provider.db.Entries() {
-			m := provider.opts.CreateModel(db)
+			m, err := provider.opts.CreateModel(db)
+			if err != nil {
+				provider.db.l.Error("error creating model from db model", "id", provider.opts.IdentifyDBModel(db), "err", err.Error())
+				continue
+			}
 			ownerKey := provider.opts.IdentifyOwner(m)
-
 			// Handle the event
 			if fn := provider.opts.OnLoad; fn != nil && !fn(ownerKey, &m, db) {
 				// Event is canceled
 				continue
 			}
-
 			entries, _ := provider.entries.Get(ownerKey)
 			entries = append(entries, m)
 			provider.entries.Set(ownerKey, entries)
