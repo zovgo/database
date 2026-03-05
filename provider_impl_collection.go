@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/k4ties/gq"
+	"github.com/zovgo/database/internal/gq"
 )
 
 // ProviderCollectionImpl is default implementation of the ProviderCollection.
@@ -15,14 +15,12 @@ type ProviderCollectionImpl[K comparable, V any, DB any] struct {
 	opts ModelCollectionOptions[K, V, DB]
 
 	entriesMu sync.RWMutex
-	// entries field is all entries grouped by owner key
-	entries gq.Map[K, []V]
-	// db is the underlying database of this provider
+	entries   gq.Map[K, []V]
+
 	db *Database[DB]
-	// closed is atomic boolean, that marks if provider is closed
+
 	closed atomic.Bool
 
-	// once field is once for loading entries from database
 	once sync.Once
 }
 
@@ -55,7 +53,6 @@ type ModelCollectionOptions[K comparable, V any, DB any] struct {
 	NotCloseDatabase bool
 }
 
-// validate validates entered options
 func (opts ModelCollectionOptions[K, V, DB]) validate() {
 	for _, v := range []struct {
 		invalidIf, expected bool
@@ -76,7 +73,6 @@ func (opts ModelCollectionOptions[K, V, DB]) validate() {
 	}
 }
 
-// NewProviderCollection creates new ProviderCollectionImpl instance
 func NewProviderCollection[K comparable, V any, DB any](db *Database[DB], opts ModelCollectionOptions[K, V, DB], init bool) ProviderCollection[K, V, DB] {
 	if db.closed.Load() {
 		panic("db is closed, can't create provider collection")
@@ -135,7 +131,6 @@ func (provider *ProviderCollectionImpl[K, V, DB]) PutEntryUnsafe(ownerKey K, v V
 		provider.entries.Set(ownerKey, []V{v})
 		return true
 	}
-	// Check if entry with same model key already exists
 	for _, entry := range entries {
 		if provider.opts.IdentifyModel(entry) == modelKey {
 			return false
@@ -163,9 +158,8 @@ func (provider *ProviderCollectionImpl[K, V, DB]) SetEntryUnsafe(ownerKey K, v V
 		provider.entries.Set(ownerKey, []V{v})
 		return
 	}
-	var found bool
+	found := false
 	for i, entry := range entries {
-		// Replace existing entry or append new one
 		if provider.opts.IdentifyModel(entry) == modelKey {
 			entries[i] = v
 			found = true
@@ -218,8 +212,8 @@ func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey
 		provider.entriesMu.Lock()
 		defer provider.entriesMu.Unlock()
 	}
-	entries, exists := provider.entries.Get(ownerKey)
-	if !exists {
+	entries, ok := provider.entries.Get(ownerKey)
+	if !ok {
 		return
 	}
 	for i, entry := range entries {
@@ -227,9 +221,9 @@ func (provider *ProviderCollectionImpl[K, V, DB]) removeEntry(ownerKey, modelKey
 			entries = append(entries[:i], entries[i+1:]...)
 			if len(entries) == 0 {
 				provider.entries.Delete(ownerKey)
-			} else {
-				provider.entries.Set(ownerKey, entries)
+				return
 			}
+			provider.entries.Set(ownerKey, entries)
 			return
 		}
 	}
@@ -431,9 +425,7 @@ func (provider *ProviderCollectionImpl[K, V, DB]) Load() {
 				continue
 			}
 			ownerKey := provider.opts.IdentifyOwner(m)
-			// Handle the event
 			if fn := provider.opts.OnLoad; fn != nil && !fn(ownerKey, &m, db) {
-				// Event is canceled
 				continue
 			}
 			entries, _ := provider.entries.Get(ownerKey)

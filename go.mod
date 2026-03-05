@@ -3,7 +3,6 @@ module github.com/zovgo/database
 go 1.24.4
 
 require (
-	github.com/k4ties/gq v0.0.0-20250728164214-026aa27b2a41
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.0
 )

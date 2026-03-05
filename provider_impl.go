@@ -7,28 +7,20 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/k4ties/gq"
+	"github.com/zovgo/database/internal/gq"
 )
-
-//
-// I'm not sure what would be better, IdentifiedModel interface (with UUID
-// method), or ask user for a function "func(V) K", that gets identifier by
-// model by user choice. But for now I'll keep function.
-//
 
 // ProviderImpl is default implementation of the Provider.
 type ProviderImpl[K comparable, V any, DB any] struct {
 	opts ModelOptions[K, V, DB]
 
 	entriesMu sync.RWMutex
-	// entries field is all entries of the provider.
-	entries gq.Map[K, V]
-	// db is the underlying database of this provider.
+	entries   gq.Map[K, V]
+
 	db *Database[DB]
-	// closed is atomic boolean, that marks if provider is closed.
+
 	closed atomic.Bool
 
-	// once field is once for loading entries from database.
 	once sync.Once
 }
 
@@ -94,8 +86,6 @@ func (opts ModelOptions[K, V, DB]) validate() {
 	}
 }
 
-// NewProvider creates new ProviderImpl instance.
-// It requires to Database not be closed.
 func NewProvider[K comparable, V any, DB any](db *Database[DB], opts ModelOptions[K, V, DB], init bool) Provider[K, V, DB] {
 	if db.closed.Load() {
 		panic("db is closed, can't create provider")
